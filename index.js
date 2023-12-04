@@ -16,7 +16,6 @@ class AutoManager
             this.managerGroup = items.getItem('gAutoManager');
         }
 
-
         this.itemConfig = Object.assign(config, {
             type: 'String',
             name: this.stateItemName(),
@@ -83,7 +82,7 @@ class AutoManager
             description: "Set back auto timer",
             triggers: [triggers.GenericCronTrigger("0 0/1 * * * ?")],
             execute: (event) => {
-                items.getItem('gAutoManager').members.forEach(function(item) {
+                let item = items.getItem(this.stateItemName());
                     let minutes = parseInt(item.state);
         
                     if (minutes > 0) {
@@ -103,10 +102,9 @@ class AutoManager
                     } else {
                         items.metadata.replaceMetadata(item, 'automation', '');
                     }
-                });
             },
             tags: ['AutoManager'],
-            id: `automanager_intervals`,
+            id: `automation_intervals_${this.name}`,
             overwrite: true
         });
 
@@ -228,6 +226,7 @@ class AutoManager
             name: 'Automanager handle rule',
             triggers: t,
             execute: event => {
+                if (items.getItem(this.stateItemName()).state !== 'ON') return;
                 let callback_return = callback.call(this, event);
 
                 if (this.simpleMode !== null && (typeof callback_return === 'string' || callback_return instanceof String)) {
