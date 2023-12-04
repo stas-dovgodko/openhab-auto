@@ -1,10 +1,6 @@
 {
   "name": "openhab-auto",
-<<<<<<< HEAD
-  "version": "1.0.0",
-=======
   "version": "1.1.0",
->>>>>>> c3b23f8 (1.1.0)
   "description": "",
   "main": "index.js",
   "scripts": {
