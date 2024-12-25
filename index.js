@@ -1,11 +1,21 @@
 const {rules, items, triggers} = require('openhab');
 
+
 class AutoManager 
 {
+    pooled = false;
+
+    #onSwitch = false;
+    #onChange = false;
+
     constructor(name, config, managable)
     {
         this.name = name;
         this.manualValue = 'OFF';
+
+        this.onChange = this.onChange.bind(this);
+        this.onSwitch = this.onSwitch.bind(this);
+        this.auto = this.auto.bind(this);
 
         this.managerGroup = items.getItem('gAutoManager', true);
         if (this.managerGroup === null) {
@@ -16,10 +26,15 @@ class AutoManager
             this.managerGroup = items.getItem('gAutoManager');
         }
 
+        if (('groups' in config) && Array.isArray(config.groups)) {
+            config.groups.push('gAutoManager');
+        } else {
+            config.groups = ['gAutoManager'];            
+        }
+
         this.itemConfig = Object.assign(config, {
             type: 'String',
-            name: this.stateItemName(),
-            groups: ['gAutoManager'],
+            name: items.safeItemName(`AutoManager_${this.name}State`),
             metadata: {
                 automation: {
                     value: null,
@@ -59,7 +74,7 @@ class AutoManager
         rules.JSRule({
             name: "Track automation time",
             description: "Set meta auto timer",
-            triggers: [triggers.ItemStateChangeTrigger(this.stateItemName())],
+            triggers: [triggers.ItemStateChangeTrigger(this.itemConfig.name, undefined, undefined, 'switch')],
             execute: (event) => {
                 let t = time.ZonedDateTime.now().toString();
 
@@ -67,7 +82,12 @@ class AutoManager
                 items.metadata.replaceMetadata(event.itemName, 'automation', '');
 
                 try {
-                    rules.setEnabled(items.safeItemName(`${this.name}_handle`), items.getItem(this.stateItemName()).state == 'ON');
+                    const auto_state = (items.getItem(this.itemConfig.name).state == 'ON');
+                    rules.setEnabled(items.safeItemName(`${this.name}_handle`), auto_state);
+
+                    if (this.#onSwitch) {
+                        this.#onSwitch.call(this, event);
+                    }
                 } catch (e) {
                     // handle rule is optional
                 }
@@ -82,7 +102,7 @@ class AutoManager
             description: "Set back auto timer",
             triggers: [triggers.GenericCronTrigger("0 0/1 * * * ?")],
             execute: (event) => {
-                let item = items.getItem(this.stateItemName());
+                let item = items.getItem(this.itemConfig.name);
                     let minutes = parseInt(item.state);
         
                     if (minutes > 0) {
@@ -95,7 +115,7 @@ class AutoManager
                         } catch (e) {
                             elapsed = '-';
                         }
-                        if (!item.history.changedSince(t)) {
+                        if (!item.persistence.changedSince(t)) {
                             item.postUpdate('ON');
                         }
                         items.metadata.replaceMetadata(item, 'automation', `${elapsed}`);
@@ -121,12 +141,22 @@ class AutoManager
                     rules.JSRule({
                         name: 'Automanager manual rule',
                         triggers: [
-                            triggers.ItemStateChangeTrigger(name)
+                            triggers.ItemStateChangeTrigger(name, undefined, undefined, 'manual')
                         ],
                         execute: (event) => {
-                            const meta = items.getItem(event.itemName).getMetadata(items.safeItemName(`${this.name}_auto`))
-                            if (items.getItem(this.stateItemName()).state == 'ON' && (!meta || items.getItem(event.itemName).state != meta.value)) {
-                                items.getItem(this.stateItemName()).postUpdate(this.manualValue);
+                            const meta_name = items.safeItemName(`${this.name}_auto`);
+                            const meta = items.getItem(event.itemName).getMetadata(meta_name)
+                            if (items.getItem(this.itemConfig.name).state == 'ON' && (!meta)) {
+                                items.getItem(this.itemConfig.name).postUpdate(this.manualValue);
+
+                                if (this.#onSwitch) {
+                                    this.#onSwitch.call(this, event);
+                                }
+                            } else { 
+                                items.getItem(name).removeMetadata(meta_name);
+                                if (this.#onChange) {
+                                    this.#onChange.call(this, event);
+                                }
                             }
                         },
 
@@ -138,15 +168,20 @@ class AutoManager
             });
         }
     }
+    
 
-
-    sendAutoCommand(name, command) {
+    auto(name, command) {
         const meta_name = items.safeItemName(`${this.name}_auto`);
         if (this.items.includes(name)) {
             items.getItem(name).replaceMetadata(meta_name, command);
-            items.getItem(name).sendCommand(command);
+
+            //let before = items.getItem(name).state;
+            if (items.getItem(name).sendCommandIfDifferent(command)) {
+            }
         }
     }
+
+
 
     manual(manual) {
         this.manualValue = manual.toString();
@@ -161,10 +196,10 @@ class AutoManager
 
         if (options.length > 0) {
             try {
-                items.metadata.replaceMetadata(this.stateItemName(), 'stateDescription', "", {
+                items.metadata.replaceMetadata(this.itemConfig.name, 'stateDescription', "", {
                     'options': options.substring(0, options.length-1)
                 });
-                items.metadata.replaceMetadata(this.stateItemName(), 'commandDescription', "", {
+                items.metadata.replaceMetadata(this.itemConfig.name, 'commandDescription', "", {
                     'options': options.substring(0, options.length-1)
                 });
             } catch (e) {
@@ -178,67 +213,88 @@ class AutoManager
         }
     }
 
-    state() {
-        return items.getItem(this.stateItemName()).state;
+    onChange(callback)
+    {
+        this.#onChange = callback;
+
+        return this;
     }
 
-    stateItemName() {
-        return items.safeItemName(`AutoManager_${this.name}State`);
+    onSwitch(callback)
+    {
+        this.#onSwitch = callback;
+
+        return this;
     }
 
-    description(newdescription) {
-        if (newdescription === undefined) {
-            let meta = items.getItem(this.stateItemName()).getMetadata('description');
+    hint(text) {
+        if (text === undefined) {
+            let meta = items.getItem(this.itemConfig.name).getMetadata('hint');
             if (meta !== null) {
                 return meta.value;
             } else {
                 return null;
             }
         } else {
-            items.getItem(this.stateItemName()).replaceMetadata('description', newdescription);
+            items.getItem(this.itemConfig.name).replaceMetadata('hint', text);
 
             return this;
         }
     }
 
-
-
-    triggers(extra) {
-
-        let list = [triggers.ItemStateUpdateTrigger(this.stateItemName())];
-
-        if (Array.isArray(extra)) {
-            return list.concat(extra);
-        } else {
-            return list;
-        }
-    }
-
-    handle(callback, extratriggers) {
+    handle(callback, extratriggers, debounce = 15) {
         const rule_id = items.safeItemName(`${this.name}_handle`);
         let t = [
-            triggers.ItemStateUpdateTrigger(this.stateItemName())
+            triggers.ItemStateUpdateTrigger(this.itemConfig.name)
         ];
         if (Array.isArray(extratriggers)) {
-            t = t.concat(extratriggers);
+
+            extratriggers.forEach((trigger) => {
+                if (typeof trigger === 'string' || trigger instanceof String) {
+                    t.push(triggers.ItemStateUpdateTrigger(trigger));
+                } else {
+                    t.push(trigger);
+                }
+            });
         }
+        if (debounce > 0 && debounce <= 60) {
+
+            t.push(triggers.GenericCronTrigger('0/' + debounce + ' * * ? * * *', 'debouce'));
+        } else if (debounce > 60 && debounce <= 3600) {
+
+            t.push(triggers.GenericCronTrigger('0 0/' + Math.round(debounce / 60) + ' * ? * * *', 'debouce'));
+        }
+
+        this.pooled = false;
         rules.JSRule({
             name: 'Automanager handle rule',
             triggers: t,
             execute: event => {
-                if (items.getItem(this.stateItemName()).state !== 'ON') return;
-                let callback_return = callback.call(this, event);
+                if (debounce && (event.module != 'debouce')) { // debounce
+                    this.pooled = event; // should be debounced
+                    return;
+                }
+                if (debounce && this.pooled == false) {
+                    return;
+                }
+
+                if (items.getItem(this.itemConfig.name).state !== 'ON') return;
+
+                let callback_return = callback.call(this, (this.pooled != false) ? this.pooled : event);
 
                 if (this.simpleMode !== null && (typeof callback_return === 'string' || callback_return instanceof String)) {
-                    this.sendAutoCommand(this.simpleMode, callback_return);
+                    this.auto(this.simpleMode, callback_return);
                 }
+                this.pooled = false;
             },
             tags: ['AutoManager'],
             id: rule_id,
             overwrite: true
         });
 
-        rules.setEnabled(rule_id, items.getItem(this.stateItemName()).state == 'ON');
+        rules.setEnabled(rule_id, items.getItem(this.itemConfig.name).state == 'ON');
+
+        return this;
     }
 }
 
@@ -246,5 +302,26 @@ class AutoManager
 
 exports.manager = (name, config, managable) => {
 
-    return new AutoManager(name, config, managable);
+
+    return new Proxy(new AutoManager(name, config, managable), {
+        
+        set(target, name, value, receiver) {
+            if (Reflect.has(target, name)) {
+                return Reflect.set(target, name, value, receiver);
+                
+            }
+            
+            target.auto(name, value);
+        },
+
+        get(target, name, receiver) {
+
+            if (Reflect.has(target, name)) {
+                return Reflect.get(target, name, receiver);
+                
+            }
+
+            return items.getItem(prop).state;
+        }
+    });
 }
