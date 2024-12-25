@@ -22,6 +22,11 @@
   "homepage": "https://github.com/stas-dovgodko/openhab-auto#readme",
   "dependencies": {
     "openhab": "^5.8.1"
+<<<<<<< HEAD
   }
 
+=======
+  
+  }
+>>>>>>> 0188965 (Deps)
 }
